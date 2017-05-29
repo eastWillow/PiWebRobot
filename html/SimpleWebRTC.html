@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Simple WebRTC</title>
+<style>
+.button {
+    border: none;
+    padding: 15px 32px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 16px;
+    margin: 4px 2px;
+    cursor: pointer;
+}
+</style>
+<script type="text/javascript">
+    var signalling_server_hostname = location.hostname || "192.168.43.85";
+    var signalling_server_address = signalling_server_hostname + ':' + (location.port || (location.protocol === 'https:' ? 443 : 80));
+    var pcConfig = {"iceServers": [
+            {"urls": ["stun:stun.l.google.com:19302", "stun:" + signalling_server_hostname + ":3478"]}
+        ]};
+    var pcOptions = {
+        optional: [
+            // Deprecated:
+            //{RtpDataChannels: false},
+            //{DtlsSrtpKeyAgreement: true}
+        ]
+    };
+    var mediaConstraints = {
+        optional: [],
+        mandatory: {
+            OfferToReceiveAudio: true,
+            OfferToReceiveVideo: true
+        }
+    };  
+    function onRemoteStreamAdded(event) {
+        console.log("Remote stream added:", URL.createObjectURL(event.stream));
+        var remoteVideoElement = document.getElementById('remote-video');
+        remoteVideoElement.src = URL.createObjectURL(event.stream);
+        remoteVideoElement.play();
+    }
+    function onIceCandidate(event) {
+        if (event.candidate) {
+            var candidate = {
+                sdpMLineIndex: event.candidate.sdpMLineIndex,
+                sdpMid: event.candidate.sdpMid,
+                candidate: event.candidate.candidate
+            };
+            var request = {
+                what: "addIceCandidate",
+                data: JSON.stringify(candidate)
+            };
+            ws.send(JSON.stringify(request));
+        } else {
+            console.log("End of candidates.");
+        }
+    }
+    function onRemoteStreamRemoved(event) {
+        var remoteVideoElement = document.getElementById('remote-video');
+        remoteVideoElement.src = '';
+    }
+    function createPeerConnection() {
+        try {
+            var pcConfig_ = pcConfig;
+            try {
+                ice_servers = "";
+                if (ice_servers) {
+                    pcConfig_.iceServers = JSON.parse(ice_servers);
+                }
+            } catch (e) {
+                alert(e + "\nExample: "
+                        + '\n[ {"urls": "stun:stun1.example.net"}, {"urls": "turn:turn.example.org", "username": "user", "credential": "myPassword"} ]'
+                        + "\nContinuing with built-in RTCIceServer array");
+            }
+            console.log(JSON.stringify(pcConfig_));
+            pc = new RTCPeerConnection(pcConfig_, pcOptions);
+            pc.onicecandidate = onIceCandidate;
+            pc.onaddstream = onRemoteStreamAdded;
+            pc.onremovestream = onRemoteStreamRemoved;
+            console.log("peer connection successfully created!");
+        } catch (e) {
+            console.error("createPeerConnection() failed");
+        }
+    }
+    function start() {
+        if ("WebSocket" in window) {
+            server = "192.168.43.85:8080";
+
+            var protocol = location.protocol === "https:" ? "wss:" : "ws:";
+            ws = new WebSocket(protocol + '//' + server + '/stream/webrtc');
+
+            function call(stream) {
+                createPeerConnection();
+                if (stream) {
+                    pc.addStream(stream);
+                }
+                var request = {
+                    what: "call",
+                    options: {
+                        force_hw_vcodec: false,
+                        vformat: '60'
+                    }
+                };
+                ws.send(JSON.stringify(request));
+                console.log("call(), request=" + JSON.stringify(request));
+            }
+
+            ws.onopen = function () {
+                console.log("onopen()");
+                call();
+            };
+
+            ws.onmessage = function (evt) {
+                var msg = JSON.parse(evt.data);
+                if (msg.what !== 'undefined') {
+                    var what = msg.what;
+                    var data = msg.data;
+                } else { /* TODO: for backward compatibility, remove this branch in the future */
+                    var what = msg.type;
+                    var data = msg; // only used for 'offer' in the switch case below
+                    console.log("still using the old API?");
+                }
+                //console.log("message=" + msg);
+                console.log("message =" + what);
+
+                switch (what) {
+                    case "offer":
+                        pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(data)),
+                                function onRemoteSdpSuccess() {
+                                    console.log('onRemoteSdpSucces()');
+                                    pc.createAnswer(function (sessionDescription) {
+                                        pc.setLocalDescription(sessionDescription);
+                                        var request = {
+                                            what: "answer",
+                                            data: JSON.stringify(sessionDescription)
+                                        };
+                                        ws.send(JSON.stringify(request));
+                                        console.log(request);
+
+                                    }, function (error) {
+                                        alert("Failed to createAnswer: " + error);
+
+                                    }, mediaConstraints);
+                                },
+                                function onRemoteSdpError(event) {
+                                    alert('Failed to set remote description (unsupported codec on this browser?): ' + event);
+                                    stop();
+                                }
+                        );
+
+                        var request = {
+                            what: "generateIceCandidates"
+                        };
+                        console.log(request);
+                        ws.send(JSON.stringify(request));
+                        break;
+
+                    case "answer":
+                        break;
+
+                    case "message":
+                        alert(msg.data);
+                        break;
+
+                    case "geticecandidate": // TODO: remove
+                    case "iceCandidates":
+                        var candidates = JSON.parse(msg.data);
+                        for (var i = 0; candidates && i < candidates.length; i++) {
+                            var elt = candidates[i];
+                            let candidate = new RTCIceCandidate({sdpMLineIndex: elt.sdpMLineIndex, candidate: elt.candidate});
+                            pc.addIceCandidate(candidate,
+                                    function () {
+                                        console.log("IceCandidate added: " + JSON.stringify(candidate));
+                                    },
+                                    function (error) {
+                                        console.error("addIceCandidate error: " + error);
+                                    }
+                            );
+                        }
+                        document.documentElement.style.cursor = 'default';
+                        break;
+                }
+            };
+
+            ws.onclose = function (evt) {
+                if (pc) {
+                    pc.close();
+                    pc = null;
+                }
+                document.documentElement.style.cursor = 'default';
+            };
+
+            ws.onerror = function (evt) {
+                alert("An error has occurred!");
+                ws.close();
+            };
+
+        } else {
+            alert("Sorry, this browser does not support WebSockets.");
+        }
+    }
+    function stop() {
+        document.getElementById('remote-video').src = '';
+        if (pc) {
+            pc.close();
+            pc = null;
+        }
+        if (ws) {
+            ws.close();
+            ws = null;
+        }
+    }
+</script>
+<style>
+</style>
+</head>
+<div style="text-align:center">
+<video id="remote-video" autoplay width="640" height="480" class="vsc-initialized" data-vscid="ndza16m2s" src(unknown)></video>
+<div>
+<button id="start" class="button" style="background-color: green; color: white" onclick="start();">Start!</button>
+<button id="stop" class="button" style="background-color: red; color: white" onclick="stop();">Stop~</button>
+</div>
+<iframe src="http://192.168.43.85:5000" scrolling="no" width="600" height="200" align="center" frameborder="no"> </iframe>
+</div>
+</body></html>
