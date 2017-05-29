@@ -61,5 +61,6 @@ exit 0
 3. Setting Autoexecute
 
 ```Shell Session
+sudo chmod +x flask.sh
 sudo update-rc.d flask.sh defaults
 ```
