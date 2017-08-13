@@ -14,7 +14,7 @@
 }
 </style>
 <script type="text/javascript">
-    var signalling_server_hostname = location.hostname || "192.168.43.85";
+    var signalling_server_hostname = location.hostname;
     var signalling_server_address = signalling_server_hostname + ':' + (location.port || (location.protocol === 'https:' ? 443 : 80));
     var pcConfig = {"iceServers": [
             {"urls": ["stun:stun.l.google.com:19302", "stun:" + signalling_server_hostname + ":3478"]}
@@ -84,7 +84,7 @@
     }
     function start() {
         if ("WebSocket" in window) {
-            server = "192.168.43.85:8080";
+            server = location.hostname+":8080";
 
             var protocol = location.protocol === "https:" ? "wss:" : "ws:";
             ws = new WebSocket(protocol + '//' + server + '/stream/webrtc');
@@ -210,6 +210,9 @@
             ws = null;
         }
     }
+    window.onload = function(){
+        document.getElementById('flaskFrame').src = location.hostname + ":5000";
+    }
 </script>
 <style>
 </style>
@@ -220,6 +223,6 @@
 <button id="start" class="button" style="background-color: green; color: white" onclick="start();">Start!</button>
 <button id="stop" class="button" style="background-color: red; color: white" onclick="stop();">Stop~</button>
 </div>
-<iframe src="http://192.168.43.85:5000" scrolling="no" width="600" height="200" align="center" frameborder="no"> </iframe>
+<iframe id="flaskFrame" src="http://hostname:5000" scrolling="no" width="600" height="200" align="center" frameborder="no"> </iframe>
 </div>
 </body></html>
